@@ -63,9 +63,7 @@ type config struct {
 	Offline                        bool
 	OfflinePath                    string
 	RecordPath                     string
-	PrivateIngestBaseUrls          string
-	PublicIngestBaseUrls           string
-	NoCPULimit                     bool
+	DBPath                         string
 	PrintVersion                   bool
 	UpdateGithubOwner              string
 	UpdateGithubRepo               string
@@ -86,14 +84,6 @@ func (config *config) SetupFlags() {
 
 	if config.OfflinePath != "" {
 		config.Offline = true
-		config.DisableUpload = true
-
-		if config.PublicIngestBaseUrls == "http+pow://west.aodp.local:3000" {
-			config.DisableUpload = false
-		}
-
-		log.Infof("config.PublicIngestBaseUrls: %v", config.PublicIngestBaseUrls)
-		log.Infof("config.DisableUpload: %v", config.DisableUpload)
 	}
 
 	if config.DisableUpload {
@@ -184,13 +174,6 @@ func (config *config) setupDebugFlags() {
 		"Ignore the decoding errors when debugging",
 	)
 
-	flag.BoolVar(
-		&config.NoCPULimit,
-		"no-limit",
-		false,
-		"Use all available CPU cores",
-	)
-
 }
 
 func (config *config) setupCommonFlags() {
@@ -198,7 +181,7 @@ func (config *config) setupCommonFlags() {
 		&config.DisableUpload,
 		"d",
 		false,
-		"If specified no attempts will be made to upload data to remote server.",
+		"If specified no attempts will be made to save data to the database.",
 	)
 
 	flag.StringVar(
@@ -223,17 +206,10 @@ func (config *config) setupCommonFlags() {
 	)
 
 	flag.StringVar(
-		&config.PublicIngestBaseUrls,
-		"i",
-		"https+pow://albion-online-data.com",
-		"Base URL to send PUBLIC data to, can be 'nats://', 'http://', 'https://' or 'noop' and can have multiple uploaders. Comma separated.",
-	)
-
-	flag.StringVar(
-		&config.PrivateIngestBaseUrls,
-		"p",
-		"",
-		"Base URL to send PRIVATE data to, can be 'nats://', 'http://', 'https://' or 'noop' and can have multiple uploaders. Comma separated.",
+		&config.DBPath,
+		"db",
+		"albiondata.db",
+		"Path to the SQLite database file.",
 	)
 
 	flag.StringVar(

@@ -1,5 +1,6 @@
 .idea/
 _vendor-[0-9]*
+vendor/
 .vscode/
 *.exe
 *.gz
