@@ -1,9 +1,14 @@
 package client
 
 import (
+	"bufio"
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/ao-data/albiondata-client/lib"
 	"github.com/ao-data/albiondata-client/log"
@@ -29,6 +34,7 @@ var locationMap = map[string]string{
 type sqliteUploader struct {
 	db          *sql.DB
 	writeQueue  chan writeRequest
+	albionIDMap map[string]int32 // item_type_id -> albion_id from items.txt
 }
 
 // newSQLiteUploader creates a new SQLite uploader
@@ -48,8 +54,9 @@ func newSQLiteUploader(dbPath string) (uploader, error) {
 	}
 
 	uploader := &sqliteUploader{
-		db:         db,
-		writeQueue: make(chan writeRequest, 100),
+		db:          db,
+		writeQueue:  make(chan writeRequest, 100),
+		albionIDMap: loadAlbionIDMap(),
 	}
 
 	// Start the write queue processor goroutine
@@ -67,8 +74,10 @@ func initSchema(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS market_orders (
 			id INTEGER, item_type_id TEXT, item_group_type_id TEXT,
 			location_id TEXT, quality_level INTEGER, enchantment_level INTEGER,
+			albion_id INTEGER,
 			unit_price_silver INTEGER, amount INTEGER, auction_type TEXT,
-			expires TEXT, upload_identifier TEXT, captured_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			expires TEXT, upload_identifier TEXT, captured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(item_type_id, enchantment_level, location_id, quality_level, auction_type)
 		)`,
 		`CREATE TABLE IF NOT EXISTS market_histories (
 			albion_id INTEGER, location_id TEXT, quality_level INTEGER,
@@ -143,7 +152,51 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
-	// Add per_item column to market_histories if it doesn't exist
+	// Rebuild market_orders with UNIQUE constraint if it doesn't already have one
+	if !hasUniqueConstraint(db, "market_orders") {
+		_, err := db.Exec(`
+			CREATE TABLE IF NOT EXISTS market_orders_new (
+				id INTEGER, item_type_id TEXT, item_group_type_id TEXT,
+				location_id TEXT, quality_level INTEGER, enchantment_level INTEGER,
+				albion_id INTEGER,
+				unit_price_silver INTEGER, amount INTEGER, auction_type TEXT,
+				expires TEXT, upload_identifier TEXT, captured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE(item_type_id, enchantment_level, location_id, quality_level, auction_type)
+			)
+		`)
+		if err != nil {
+			log.Warnf("Failed to create market_orders_new: %v", err)
+		} else {
+			// Copy keeping only the latest row per unique key
+			_, err = db.Exec(`
+				INSERT OR REPLACE INTO market_orders_new
+				SELECT id, item_type_id, item_group_type_id, location_id, quality_level,
+					enchantment_level, NULL, unit_price_silver, amount, auction_type,
+					expires, upload_identifier, captured_at
+				FROM market_orders
+				ORDER BY captured_at ASC
+			`)
+			if err != nil {
+				log.Warnf("Failed to migrate market_orders data: %v", err)
+			} else {
+				db.Exec(`DROP TABLE market_orders`)
+				db.Exec(`ALTER TABLE market_orders_new RENAME TO market_orders`)
+				log.Infof("Rebuilt market_orders with UNIQUE constraint")
+			}
+		}
+	}
+
+	// Add albion_id column to market_orders if it doesn't already have one
+	if !hasColumn(db, "market_orders", "albion_id") {
+		_, err := db.Exec(`ALTER TABLE market_orders ADD COLUMN albion_id INTEGER`)
+		if err != nil {
+			log.Warnf("Failed to add albion_id column to market_orders: %v", err)
+		} else {
+			log.Infof("Added albion_id column to market_orders")
+		}
+	}
+
+	// Add per_item column to market_histories if it doesn't already have one
 	if !hasColumn(db, "market_histories", "per_item") {
 		_, err := db.Exec(`ALTER TABLE market_histories ADD COLUMN per_item REAL`)
 		if err != nil {
@@ -154,6 +207,29 @@ func runMigrations(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+// hasUniqueConstraint checks if a table has any UNIQUE constraint defined
+func hasUniqueConstraint(db *sql.DB, tableName string) bool {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA index_list(%s)`, tableName))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var seq int
+		var name string
+		var unique int
+		var origin string
+		var partial int
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			continue
+		}
+		if unique == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // hasColumn checks if a table has a specific column
@@ -186,6 +262,34 @@ func hasColumn(db *sql.DB, tableName, columnName string) bool {
 	return false
 }
 
+
+// loadAlbionIDMap parses .cache/items.txt to build item_type_id -> albion_id mapping.
+// items.txt format: "albion_id : item_type_id (padded) : Display Name"
+func loadAlbionIDMap() map[string]int32 {
+	m := make(map[string]int32)
+	data, err := os.ReadFile(".cache/items.txt")
+	if err != nil {
+		return m
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		parts := strings.Split(scanner.Text(), ":")
+		if len(parts) < 3 {
+			continue
+		}
+		numStr := strings.TrimSpace(parts[0])
+		itemID := strings.TrimSpace(parts[1])
+		if numStr == "" || itemID == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(numStr, 10, 32)
+		if err != nil {
+			continue
+		}
+		m[itemID] = int32(n)
+	}
+	return m
+}
 
 // populateLocations inserts or updates the location mappings
 func populateLocations(db *sql.DB) error {
@@ -276,10 +380,10 @@ func (u *sqliteUploader) insertMarketOrders(tx *sql.Tx, body []byte, identifier 
 	}
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO market_orders (
+		INSERT OR REPLACE INTO market_orders (
 			id, item_type_id, item_group_type_id, location_id, quality_level,
-			enchantment_level, unit_price_silver, amount, auction_type, expires, upload_identifier
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			enchantment_level, albion_id, unit_price_silver, amount, auction_type, expires, upload_identifier
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -287,9 +391,10 @@ func (u *sqliteUploader) insertMarketOrders(tx *sql.Tx, body []byte, identifier 
 	defer stmt.Close()
 
 	for _, order := range upload.Orders {
+		albionID := u.albionIDMap[order.ItemID]
 		_, err := stmt.Exec(
 			order.ID, order.ItemID, order.GroupTypeId, order.LocationID, order.QualityLevel,
-			order.EnchantmentLevel, order.Price/1000, order.Amount, order.AuctionType, order.Expires, identifier,
+			order.EnchantmentLevel, albionID, order.Price/10000, order.Amount, order.AuctionType, order.Expires, identifier,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert market order: %w", err)
@@ -359,7 +464,7 @@ func (u *sqliteUploader) insertGoldPrices(tx *sql.Tx, body []byte, identifier st
 
 	for i, price := range upload.Prices {
 		epochTimestamp := (upload.TimeStamps[i] - dotNetEpochOffset) / dotNetTicksPerSecond
-		_, err := stmt.Exec(price/1000, epochTimestamp, identifier)
+		_, err := stmt.Exec(price/10000, epochTimestamp, identifier)
 		if err != nil {
 			return fmt.Errorf("failed to insert gold price: %w", err)
 		}
@@ -473,8 +578,8 @@ func (u *sqliteUploader) insertMarketNotifications(tx *sql.Tx, body []byte, iden
 		locationID = notification.LocationID
 		amount = notification.Amount
 		expires = notification.Expires
-		price = notification.Price / 1000
-		totalAfterTaxes.Float64 = float64(notification.TotalAfterTaxes) / 1000
+		price = notification.Price / 10000
+		totalAfterTaxes.Float64 = float64(notification.TotalAfterTaxes) / 10000
 		totalAfterTaxes.Valid = true
 
 	case *lib.MarketExpiryNotification:
@@ -483,7 +588,7 @@ func (u *sqliteUploader) insertMarketNotifications(tx *sql.Tx, body []byte, iden
 		locationID = notification.LocationID
 		amount = notification.Amount
 		expires = notification.Expires
-		price = notification.Price / 1000
+		price = notification.Price / 10000
 		sold.Int64 = int64(notification.Sold)
 		sold.Valid = true
 

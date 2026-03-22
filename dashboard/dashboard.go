@@ -38,6 +38,7 @@ var locationMap = map[string]string{
 
 var itemCache map[string]string
 var itemCacheTime time.Time
+var albionIDCache map[string]int32 // item_type_id -> albion_id
 
 type Item struct {
 	ID   string `json:"id"`
@@ -45,12 +46,14 @@ type Item struct {
 }
 
 type Order struct {
-	ItemTypeID  string `json:"item_type_id"`
-	City        string `json:"city"`
-	Price       int64  `json:"unit_price_silver"`
-	Supply      int64  `json:"amount"`
-	AuctionType string `json:"auction_type"`
-	CapturedAt  string `json:"captured_at"`
+	ItemTypeID  string   `json:"item_type_id"`
+	City        string   `json:"city"`
+	Quality     int      `json:"quality_level"`
+	Price       int64    `json:"unit_price_silver"`
+	Supply      int64    `json:"amount"`
+	AuctionType string   `json:"auction_type"`
+	CapturedAt  string   `json:"captured_at"`
+	WeeklyAvg   *float64 `json:"weekly_avg"`
 }
 
 type MarketPrice struct {
@@ -61,6 +64,13 @@ type MarketPrice struct {
 	Supply     int64  `json:"Supply"`
 	NumOrders  int    `json:"NumOrders"`
 	PriceClass string `json:"PriceClass"`
+}
+
+type MarketHistoryPoint struct {
+	Timestamp int64   `json:"timestamp"`
+	City      string  `json:"city"`
+	PerItem   float64 `json:"per_item"`
+	Timescale int     `json:"timescale"`
 }
 
 func loadItemsCache() (map[string]string, error) {
@@ -116,6 +126,7 @@ func loadItemsFromFile(path string) (map[string]string, error) {
 
 func parseItems(data []byte) map[string]string {
 	items := make(map[string]string)
+	albionIDs := make(map[string]int32)
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -123,19 +134,22 @@ func parseItems(data []byte) map[string]string {
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		// Format: "Number : ItemID (padded) : Display Name"
-		// Split by colon
+		// Format: "albion_id : ItemID (padded) : Display Name"
 		parts := strings.Split(line, ":")
 		if len(parts) >= 3 {
+			numStr := strings.TrimSpace(parts[0])
 			itemID := strings.TrimSpace(parts[1])
 			// Join the rest in case display name has colons
 			displayName := strings.TrimSpace(strings.Join(parts[2:], ":"))
-			// Map ItemID -> Display Name
 			if itemID != "" && displayName != "" {
 				items[itemID] = displayName
+				if n, err := strconv.ParseInt(numStr, 10, 32); err == nil {
+					albionIDs[itemID] = int32(n)
+				}
 			}
 		}
 	}
+	albionIDCache = albionIDs
 	fmt.Printf("  [dashboard] parsed %d items\n", len(items))
 	return items
 }
@@ -151,7 +165,21 @@ func findItemsByName(query string, items map[string]string) []Item {
 	return results
 }
 
+// splitItemID parses "T4_MAIN_HOLYSTAFF_AVALON@3" into ("T4_MAIN_HOLYSTAFF_AVALON", 3).
+// Items without an enchantment suffix return enchantment 0.
+func splitItemID(id string) (baseID string, enchantment int) {
+	if i := strings.LastIndex(id, "@"); i != -1 {
+		enc, err := strconv.Atoi(id[i+1:])
+		if err == nil {
+			return id[:i], enc
+		}
+	}
+	return id, 0
+}
+
 func getMarketData(db *sql.DB, itemID string) ([]MarketPrice, error) {
+	baseID, enchantment := splitItemID(itemID)
+
 	query := `
 		SELECT
 			COALESCE(l.location_name, m.location_id) AS city,
@@ -163,14 +191,15 @@ func getMarketData(db *sql.DB, itemID string) ([]MarketPrice, error) {
 		FROM market_orders m
 		LEFT JOIN locations l ON m.location_id = l.location_id
 		WHERE m.item_type_id = ?
+			AND m.enchantment_level = ?
 			AND m.auction_type = 'offer'
 			AND m.location_id IN ('0007','1002','2004','3008','4002')
 		GROUP BY m.location_id, m.quality_level
 		ORDER BY m.location_id, m.quality_level
 	`
 
-	fmt.Printf("  [dashboard] querying market data for item: %s\n", itemID)
-	rows, err := db.QueryContext(context.Background(), query, itemID)
+	fmt.Printf("  [dashboard] querying market data for item: %s (enchantment: %d)\n", baseID, enchantment)
+	rows, err := db.QueryContext(context.Background(), query, baseID, enchantment)
 	if err != nil {
 		fmt.Printf("  [dashboard] query error: %v\n", err)
 		return nil, err
@@ -181,12 +210,14 @@ func getMarketData(db *sql.DB, itemID string) ([]MarketPrice, error) {
 	for rows.Next() {
 		var mp MarketPrice
 		var city interface{}
-		err := rows.Scan(&city, &mp.Quality, &mp.MinPrice, &mp.AvgPrice, &mp.Supply, &mp.NumOrders)
+		var avgPrice float64
+		err := rows.Scan(&city, &mp.Quality, &mp.MinPrice, &avgPrice, &mp.Supply, &mp.NumOrders)
 		if err != nil {
 			return nil, err
 		}
+		mp.AvgPrice = int64(avgPrice)
 		if city != nil {
-			mp.City = city.(string)
+			mp.City = fmt.Sprintf("%s", city)
 		}
 		results = append(results, mp)
 	}
@@ -226,10 +257,21 @@ func getRecentOrders(db *sql.DB, limit int) ([]Order, error) {
 		SELECT
 			m.item_type_id,
 			COALESCE(l.location_name, m.location_id) AS city,
+			m.quality_level,
 			m.unit_price_silver,
 			m.amount,
 			m.auction_type,
-			m.captured_at
+			m.captured_at,
+			CASE WHEN m.albion_id > 0 THEN (
+				SELECT AVG(h.per_item)
+				FROM market_histories h
+				WHERE h.albion_id = m.albion_id
+					AND h.location_id = m.location_id
+					AND h.quality_level = m.quality_level
+					AND h.timescale = 1
+					AND h.timestamp >= strftime('%s', 'now', '-7 days')
+					AND h.per_item > 0
+			) ELSE NULL END AS weekly_avg
 		FROM market_orders m
 		LEFT JOIN locations l ON m.location_id = l.location_id
 		WHERE m.auction_type = 'offer'
@@ -247,14 +289,60 @@ func getRecentOrders(db *sql.DB, limit int) ([]Order, error) {
 	var orders []Order
 	for rows.Next() {
 		var o Order
-		err := rows.Scan(&o.ItemTypeID, &o.City, &o.Price, &o.Supply, &o.AuctionType, &o.CapturedAt)
+		var weeklyAvg sql.NullFloat64
+		err := rows.Scan(&o.ItemTypeID, &o.City, &o.Quality, &o.Price, &o.Supply, &o.AuctionType, &o.CapturedAt, &weeklyAvg)
 		if err != nil {
 			return nil, err
+		}
+		if weeklyAvg.Valid {
+			o.WeeklyAvg = &weeklyAvg.Float64
 		}
 		orders = append(orders, o)
 	}
 
 	return orders, nil
+}
+
+func getItemHistory(db *sql.DB, itemID string, timescale int) ([]MarketHistoryPoint, error) {
+	// market_histories stores a numeric albion_id from the game's internal ID system,
+	// which does not directly correspond to the string item_type_id used in market_orders.
+	// Until a mapping table is available, history lookup requires the raw numeric albion_id.
+	albionID, err := strconv.ParseInt(itemID, 10, 64)
+	if err != nil {
+		// Non-numeric ID — no history available yet
+		return nil, nil
+	}
+
+	query := `
+		SELECT
+			h.timestamp,
+			COALESCE(l.location_name, h.location_id) AS city,
+			h.per_item,
+			h.timescale
+		FROM market_histories h
+		LEFT JOIN locations l ON h.location_id = l.location_id
+		WHERE h.albion_id = ?
+			AND h.timescale = ?
+			AND h.location_id IN ('0007','1002','2004','3008','4002')
+			AND h.per_item > 0
+		ORDER BY h.timestamp ASC
+	`
+
+	rows, err := db.QueryContext(context.Background(), query, albionID, timescale)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var points []MarketHistoryPoint
+	for rows.Next() {
+		var p MarketHistoryPoint
+		if err := rows.Scan(&p.Timestamp, &p.City, &p.PerItem, &p.Timescale); err != nil {
+			return nil, err
+		}
+		points = append(points, p)
+	}
+	return points, nil
 }
 
 // API Handlers
@@ -281,6 +369,24 @@ func handleItemPrices(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(prices)
+}
+
+func handleItemHistory(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	itemID := r.URL.Query().Get("id")
+	timescale := 0 // default: hours
+	if ts := r.URL.Query().Get("timescale"); ts != "" {
+		if v, err := strconv.Atoi(ts); err == nil {
+			timescale = v
+		}
+	}
+
+	points, err := getItemHistory(db, itemID, timescale)
+	if err != nil {
+		http.Error(w, "Error fetching history", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(points)
 }
 
 func handleRecentOrders(w http.ResponseWriter, r *http.Request, db *sql.DB) {
@@ -329,6 +435,9 @@ func createMux(db *sql.DB, items map[string]string) http.Handler {
 				return
 			case "/api/item":
 				handleItemPrices(w, r, db)
+				return
+			case "/api/item/history":
+				handleItemHistory(w, r, db)
 				return
 			case "/api/orders/recent":
 				handleRecentOrders(w, r, db)

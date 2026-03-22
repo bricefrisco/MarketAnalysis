@@ -26,8 +26,11 @@ This keeps the database clean of stale auction orders and market mail notificati
 
 Silver amounts are divided at ingestion to normalize the data:
 
-- **Divided by 10,000:** `market_histories.silver_amount`, `market_histories.per_item`
-- **Divided by 1,000:** `market_orders.unit_price_silver`, `gold_prices.price`, `market_notifications.unit_price_silver`, `market_notifications.total_after_taxes`
+All silver/price values are **divided by 10,000** at ingestion:
+- `market_orders.unit_price_silver`
+- `market_histories.silver_amount`, `market_histories.per_item`
+- `gold_prices.price`
+- `market_notifications.unit_price_silver`, `market_notifications.total_after_taxes`
 
 ---
 
@@ -65,7 +68,7 @@ Market buy and sell orders from the auction house.
 | `location_id` | TEXT | Location code (e.g., "4002" for Fort Sterling, "BLACKBANK-1" for hideouts) |
 | `quality_level` | INTEGER | Item quality: 1-5 |
 | `enchantment_level` | INTEGER | Enchantment level: 0-3 |
-| `unit_price_silver` | INTEGER | Price per unit in silver (divided by 1000 at ingestion) |
+| `unit_price_silver` | INTEGER | Price per unit in silver (divided by 10,000 at ingestion) |
 | `amount` | INTEGER | Number of items in order |
 | `auction_type` | TEXT | Order type: "offer" (selling) or "request" (buying) |
 | `expires` | TEXT | Expiration timestamp (RFC3339 format) |
@@ -115,7 +118,7 @@ Gold-to-silver conversion rates (for premium currency trading).
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `price` | INTEGER | Price of 1 gold in silver (divided by 1000 at ingestion) |
+| `price` | INTEGER | Price of 1 gold in silver (divided by 10,000 at ingestion) |
 | `timestamp` | INTEGER | Unix epoch seconds when price was recorded |
 | `upload_identifier` | TEXT | UUID batch grouping |
 | `captured_at` | DATETIME | Server timestamp when record was inserted |
@@ -212,8 +215,8 @@ Market mail notifications (sales and expiries) (private).
 | `location_id` | TEXT | Location code |
 | `amount` | INTEGER | Number of items |
 | `expires` | TEXT | Expiration timestamp (RFC3339 format) |
-| `unit_price_silver` | INTEGER | Price per unit in silver (divided by 1000 at ingestion) |
-| `total_after_taxes` | REAL | Total revenue after marketplace taxes, in silver (divided by 1000 at ingestion; NULL for ExpiryNotification) |
+| `unit_price_silver` | INTEGER | Price per unit in silver (divided by 10,000 at ingestion) |
+| `total_after_taxes` | REAL | Total revenue after marketplace taxes, in silver (divided by 10,000 at ingestion; NULL for ExpiryNotification) |
 | `sold` | INTEGER | Units sold (NULL for SalesNotification, only in ExpiryNotification) |
 | `upload_identifier` | TEXT | UUID batch grouping |
 | `captured_at` | DATETIME | Server timestamp when record was inserted |
