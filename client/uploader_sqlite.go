@@ -354,8 +354,12 @@ func (u *sqliteUploader) insertGoldPrices(tx *sql.Tx, body []byte, identifier st
 	}
 	defer stmt.Close()
 
+	const dotNetTicksPerSecond = 10_000_000
+	const dotNetEpochOffset = 621_355_968_000_000_000
+
 	for i, price := range upload.Prices {
-		_, err := stmt.Exec(price/1000, upload.TimeStamps[i], identifier)
+		epochTimestamp := (upload.TimeStamps[i] - dotNetEpochOffset) / dotNetTicksPerSecond
+		_, err := stmt.Exec(price/1000, epochTimestamp, identifier)
 		if err != nil {
 			return fmt.Errorf("failed to insert gold price: %w", err)
 		}

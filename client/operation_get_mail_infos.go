@@ -37,9 +37,11 @@ func (m *MailInfo) StringArray() []string {
 }
 
 func (m *MailInfo) StringExpires() string {
-	// Convert timestamp from game units (10,000 per second) to Unix seconds
-	const gameTicksPerSecond = 10000
-	expiresSec := m.Expires / gameTicksPerSecond
+	// Timestamps are .NET DateTime ticks (100ns intervals since Jan 1, 0001).
+	// Subtract the offset to Unix epoch, then divide by ticks-per-second to get Unix seconds.
+	const dotNetTicksPerSecond = 10_000_000
+	const dotNetEpochOffset = 621_355_968_000_000_000
+	expiresSec := (m.Expires - dotNetEpochOffset) / dotNetTicksPerSecond
 	return time.Unix(expiresSec, 0).Format(time.RFC3339)
 }
 
