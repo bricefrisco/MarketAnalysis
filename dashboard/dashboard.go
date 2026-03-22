@@ -56,22 +56,6 @@ type Order struct {
 	WeeklyAvg   *float64 `json:"weekly_avg"`
 }
 
-type MarketPrice struct {
-	City       string `json:"City"`
-	Quality    int    `json:"Quality"`
-	MinPrice   int64  `json:"MinPrice"`
-	AvgPrice   int64  `json:"AvgPrice"`
-	Supply     int64  `json:"Supply"`
-	NumOrders  int    `json:"NumOrders"`
-	PriceClass string `json:"PriceClass"`
-}
-
-type MarketHistoryPoint struct {
-	Timestamp int64   `json:"timestamp"`
-	City      string  `json:"city"`
-	PerItem   float64 `json:"per_item"`
-	Timescale int     `json:"timescale"`
-}
 
 func loadItemsCache() (map[string]string, error) {
 	if itemCache != nil && time.Since(itemCacheTime) < time.Hour {
@@ -165,92 +149,7 @@ func findItemsByName(query string, items map[string]string) []Item {
 	return results
 }
 
-// splitItemID parses "T4_MAIN_HOLYSTAFF_AVALON@3" into ("T4_MAIN_HOLYSTAFF_AVALON", 3).
-// Items without an enchantment suffix return enchantment 0.
-func splitItemID(id string) (baseID string, enchantment int) {
-	if i := strings.LastIndex(id, "@"); i != -1 {
-		enc, err := strconv.Atoi(id[i+1:])
-		if err == nil {
-			return id[:i], enc
-		}
-	}
-	return id, 0
-}
 
-func getMarketData(db *sql.DB, itemID string) ([]MarketPrice, error) {
-	baseID, enchantment := splitItemID(itemID)
-
-	query := `
-		SELECT
-			COALESCE(l.location_name, m.location_id) AS city,
-			m.quality_level,
-			MIN(m.unit_price_silver) AS min_price,
-			AVG(m.unit_price_silver) AS avg_price,
-			SUM(m.amount) AS total_supply,
-			COUNT(*) AS num_orders
-		FROM market_orders m
-		LEFT JOIN locations l ON m.location_id = l.location_id
-		WHERE m.item_type_id = ?
-			AND m.enchantment_level = ?
-			AND m.auction_type = 'offer'
-			AND m.location_id IN ('0007','1002','2004','3008','4002')
-		GROUP BY m.location_id, m.quality_level
-		ORDER BY m.location_id, m.quality_level
-	`
-
-	fmt.Printf("  [dashboard] querying market data for item: %s (enchantment: %d)\n", baseID, enchantment)
-	rows, err := db.QueryContext(context.Background(), query, baseID, enchantment)
-	if err != nil {
-		fmt.Printf("  [dashboard] query error: %v\n", err)
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []MarketPrice
-	for rows.Next() {
-		var mp MarketPrice
-		var city interface{}
-		var avgPrice float64
-		err := rows.Scan(&city, &mp.Quality, &mp.MinPrice, &avgPrice, &mp.Supply, &mp.NumOrders)
-		if err != nil {
-			return nil, err
-		}
-		mp.AvgPrice = int64(avgPrice)
-		if city != nil {
-			mp.City = fmt.Sprintf("%s", city)
-		}
-		results = append(results, mp)
-	}
-
-	cheapestByQuality := make(map[int]int64)
-	expensiveByQuality := make(map[int]int64)
-
-	for i := range results {
-		q := results[i].Quality
-		if _, ok := cheapestByQuality[q]; !ok {
-			cheapestByQuality[q] = results[i].MinPrice
-			expensiveByQuality[q] = results[i].MinPrice
-		} else {
-			if results[i].MinPrice < cheapestByQuality[q] {
-				cheapestByQuality[q] = results[i].MinPrice
-			}
-			if results[i].MinPrice > expensiveByQuality[q] {
-				expensiveByQuality[q] = results[i].MinPrice
-			}
-		}
-	}
-
-	for i := range results {
-		q := results[i].Quality
-		if results[i].MinPrice == cheapestByQuality[q] {
-			results[i].PriceClass = "cheapest"
-		} else if results[i].MinPrice == expensiveByQuality[q] {
-			results[i].PriceClass = "expensive"
-		}
-	}
-
-	return results, nil
-}
 
 func getRecentOrders(db *sql.DB, limit int) ([]Order, error) {
 	query := `
@@ -303,48 +202,6 @@ func getRecentOrders(db *sql.DB, limit int) ([]Order, error) {
 	return orders, nil
 }
 
-func getItemHistory(db *sql.DB, itemID string, timescale int) ([]MarketHistoryPoint, error) {
-	// market_histories stores a numeric albion_id from the game's internal ID system,
-	// which does not directly correspond to the string item_type_id used in market_orders.
-	// Until a mapping table is available, history lookup requires the raw numeric albion_id.
-	albionID, err := strconv.ParseInt(itemID, 10, 64)
-	if err != nil {
-		// Non-numeric ID — no history available yet
-		return nil, nil
-	}
-
-	query := `
-		SELECT
-			h.timestamp,
-			COALESCE(l.location_name, h.location_id) AS city,
-			h.per_item,
-			h.timescale
-		FROM market_histories h
-		LEFT JOIN locations l ON h.location_id = l.location_id
-		WHERE h.albion_id = ?
-			AND h.timescale = ?
-			AND h.location_id IN ('0007','1002','2004','3008','4002')
-			AND h.per_item > 0
-		ORDER BY h.timestamp ASC
-	`
-
-	rows, err := db.QueryContext(context.Background(), query, albionID, timescale)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var points []MarketHistoryPoint
-	for rows.Next() {
-		var p MarketHistoryPoint
-		if err := rows.Scan(&p.Timestamp, &p.City, &p.PerItem, &p.Timescale); err != nil {
-			return nil, err
-		}
-		points = append(points, p)
-	}
-	return points, nil
-}
-
 // API Handlers
 
 func handleItems(w http.ResponseWriter, items map[string]string) {
@@ -357,36 +214,6 @@ func handleSearch(w http.ResponseWriter, r *http.Request, items map[string]strin
 	results := findItemsByName(query, items)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(results)
-}
-
-func handleItemPrices(w http.ResponseWriter, r *http.Request, db *sql.DB) {
-	itemID := r.URL.Query().Get("id")
-	prices, err := getMarketData(db, itemID)
-	if err != nil {
-		fmt.Printf("  [dashboard] error fetching prices for %s: %v\n", itemID, err)
-		http.Error(w, "Error fetching market data", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(prices)
-}
-
-func handleItemHistory(w http.ResponseWriter, r *http.Request, db *sql.DB) {
-	itemID := r.URL.Query().Get("id")
-	timescale := 0 // default: hours
-	if ts := r.URL.Query().Get("timescale"); ts != "" {
-		if v, err := strconv.Atoi(ts); err == nil {
-			timescale = v
-		}
-	}
-
-	points, err := getItemHistory(db, itemID, timescale)
-	if err != nil {
-		http.Error(w, "Error fetching history", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(points)
 }
 
 func handleRecentOrders(w http.ResponseWriter, r *http.Request, db *sql.DB) {
@@ -422,8 +249,14 @@ func serveSPA(w http.ResponseWriter, r *http.Request) {
 }
 
 // createMux creates a router with proper API/SPA routing
-func createMux(db *sql.DB, items map[string]string) http.Handler {
+func createMux(db *sql.DB, items map[string]string, hub *ScanHub) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// WebSocket routes
+		if r.URL.Path == "/ws/scanner" {
+			hub.ServeWS(w, r)
+			return
+		}
+
 		// API routes
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			switch r.URL.Path {
@@ -432,12 +265,6 @@ func createMux(db *sql.DB, items map[string]string) http.Handler {
 				return
 			case "/api/search":
 				handleSearch(w, r, items)
-				return
-			case "/api/item":
-				handleItemPrices(w, r, db)
-				return
-			case "/api/item/history":
-				handleItemHistory(w, r, db)
 				return
 			case "/api/orders/recent":
 				handleRecentOrders(w, r, db)
@@ -482,7 +309,7 @@ func createMux(db *sql.DB, items map[string]string) http.Handler {
 }
 
 // Start launches the market dashboard web server
-func Start(dbPath string, port string) {
+func Start(dbPath string, port string, hub *ScanHub) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		fmt.Printf("  [dashboard] failed to connect to database: %v\n", err)
@@ -496,7 +323,16 @@ func Start(dbPath string, port string) {
 		items = make(map[string]string)
 	}
 
-	handler := createMux(db, items)
+	// Build reverse map (albion_id -> item_type_id) for the scanner hub.
+	if albionIDCache != nil {
+		rev := make(map[int32]string, len(albionIDCache))
+		for itemID, id := range albionIDCache {
+			rev[id] = itemID
+		}
+		hub.SetItemMap(rev)
+	}
+
+	handler := createMux(db, items, hub)
 
 	addr := ":" + port
 	fmt.Printf("  [dashboard] 🚀 listening at http://localhost:%s\n", port)

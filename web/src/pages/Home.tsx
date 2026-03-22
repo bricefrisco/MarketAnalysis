@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   Box, Container, Typography, Paper,
   Table, TableHead, TableBody, TableRow, TableCell,
@@ -32,7 +31,6 @@ export function Home() {
   const [items, setItems] = useState<ItemsMap>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const navigate = useNavigate();
 
   useEffect(() => {
     fetch('/api/items')
@@ -97,12 +95,7 @@ export function Home() {
                   </TableRow>
                 ))
               : orders.map((order, idx) => (
-                  <TableRow
-                    key={idx}
-                    hover
-                    sx={{ cursor: 'pointer' }}
-                    onClick={() => navigate(`/item/${order.item_type_id}`)}
-                  >
+                  <TableRow key={idx}>
                     <TableCell>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         {(() => {

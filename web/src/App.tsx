@@ -1,10 +1,11 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { ThemeProvider, CssBaseline, AppBar, Toolbar, Typography, Box } from '@mui/material';
+import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
+import { ThemeProvider, CssBaseline, AppBar, Toolbar, Typography, Box, Button } from '@mui/material';
 import ShieldIcon from '@mui/icons-material/Shield';
+import RadarIcon from '@mui/icons-material/Radar';
 import theme from './theme';
 import { Search } from './pages/Search';
 import { Home } from './pages/Home';
-import { Item } from './pages/Item';
+import { Scanner } from './pages/Scanner';
 
 function App() {
   return (
@@ -18,16 +19,27 @@ function App() {
         }}>
           <Toolbar sx={{ gap: 2 }}>
             <ShieldIcon sx={{ color: 'primary.main' }} />
-            <Typography variant="h6" sx={{ color: 'text.primary', letterSpacing: '-0.02em', mr: 'auto' }}>
+            <Typography variant="h6" sx={{ color: 'text.primary', letterSpacing: '-0.02em' }}>
               Albion Market
             </Typography>
+            <Box sx={{ display: 'flex', gap: 0.5, mr: 'auto', ml: 2 }}>
+              <Button component={NavLink} to="/" end size="small"
+                sx={{ color: 'text.secondary', '&.active': { color: 'primary.main' } }}>
+                Market
+              </Button>
+              <Button component={NavLink} to="/scanner" size="small"
+                startIcon={<RadarIcon sx={{ fontSize: '16px !important' }} />}
+                sx={{ color: 'text.secondary', '&.active': { color: 'primary.main' } }}>
+                Scanner
+              </Button>
+            </Box>
             <Search />
           </Toolbar>
         </AppBar>
         <Box sx={{ minHeight: 'calc(100vh - 64px)', backgroundColor: 'background.default' }}>
           <Routes>
             <Route path="/" element={<Home />} />
-            <Route path="/item/:id" element={<Item />} />
+            <Route path="/scanner" element={<Scanner />} />
           </Routes>
         </Box>
       </BrowserRouter>

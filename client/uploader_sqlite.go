@@ -22,6 +22,10 @@ type writeRequest struct {
 	identifier string
 }
 
+// ScanNotify is called when the player requests 7-day market history for an item.
+// Set by the main package to notify the dashboard scanner in real-time.
+var ScanNotify func(albionId int32, qualityLevel int)
+
 // Location mapping for Royal Continent cities
 var locationMap = map[string]string{
 	"0007": "Thetford",
@@ -34,7 +38,7 @@ var locationMap = map[string]string{
 type sqliteUploader struct {
 	db          *sql.DB
 	writeQueue  chan writeRequest
-	albionIDMap map[string]int32 // item_type_id -> albion_id from items.txt
+	albionIDMap map[string]int32 // item_type_id -> albion_id
 }
 
 // newSQLiteUploader creates a new SQLite uploader
@@ -271,9 +275,9 @@ func loadAlbionIDMap() map[string]int32 {
 	if err != nil {
 		return m
 	}
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for scanner.Scan() {
-		parts := strings.Split(scanner.Text(), ":")
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for sc.Scan() {
+		parts := strings.Split(sc.Text(), ":")
 		if len(parts) < 3 {
 			continue
 		}
@@ -379,8 +383,8 @@ func (u *sqliteUploader) insertMarketOrders(tx *sql.Tx, body []byte, identifier 
 		return fmt.Errorf("failed to unmarshal MarketUpload: %w", err)
 	}
 
-	stmt, err := tx.Prepare(`
-		INSERT OR REPLACE INTO market_orders (
+	insertStmt, err := tx.Prepare(`
+		INSERT OR IGNORE INTO market_orders (
 			id, item_type_id, item_group_type_id, location_id, quality_level,
 			enchantment_level, albion_id, unit_price_silver, amount, auction_type, expires, upload_identifier
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -388,16 +392,40 @@ func (u *sqliteUploader) insertMarketOrders(tx *sql.Tx, body []byte, identifier 
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer insertStmt.Close()
+
+	updateStmt, err := tx.Prepare(`
+		UPDATE market_orders SET
+			id = ?, item_group_type_id = ?, albion_id = ?,
+			unit_price_silver = ?, amount = ?, expires = ?, upload_identifier = ?
+		WHERE item_type_id = ? AND enchantment_level = ? AND location_id = ?
+			AND quality_level = ? AND auction_type = ?
+			AND unit_price_silver > ?
+	`)
+	if err != nil {
+		return err
+	}
+	defer updateStmt.Close()
 
 	for _, order := range upload.Orders {
 		albionID := u.albionIDMap[order.ItemID]
-		_, err := stmt.Exec(
+		price := order.Price / 10000
+		_, err := insertStmt.Exec(
 			order.ID, order.ItemID, order.GroupTypeId, order.LocationID, order.QualityLevel,
-			order.EnchantmentLevel, albionID, order.Price/10000, order.Amount, order.AuctionType, order.Expires, identifier,
+			order.EnchantmentLevel, albionID, price, order.Amount, order.AuctionType, order.Expires, identifier,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert market order: %w", err)
+		}
+		_, err = updateStmt.Exec(
+			order.ID, order.GroupTypeId, albionID,
+			price, order.Amount, order.Expires, identifier,
+			order.ItemID, order.EnchantmentLevel, order.LocationID,
+			order.QualityLevel, order.AuctionType,
+			price,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to update market order: %w", err)
 		}
 	}
 
