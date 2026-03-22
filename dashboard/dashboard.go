@@ -53,7 +53,16 @@ type Order struct {
 	Supply      int64    `json:"amount"`
 	AuctionType string   `json:"auction_type"`
 	CapturedAt  string   `json:"captured_at"`
-	WeeklyAvg   *float64 `json:"weekly_avg"`
+	MonthlyAvg  *float64 `json:"monthly_avg"`
+	Profit      *float64 `json:"profit"`
+	ProfitPct   *float64 `json:"profit_pct"`
+}
+
+type OrdersResponse struct {
+	Orders   []Order `json:"orders"`
+	Total    int     `json:"total"`
+	Page     int     `json:"page"`
+	PageSize int     `json:"page_size"`
 }
 
 
@@ -151,7 +160,24 @@ func findItemsByName(query string, items map[string]string) []Item {
 
 
 
-func getRecentOrders(db *sql.DB, limit int) ([]Order, error) {
+const marketTaxFactor = 0.935 // 6.5% marketplace tax (4% transaction + 2.5% listing, non-premium)
+
+func getRecentOrders(db *sql.DB, page, pageSize int) ([]Order, int, error) {
+	const baseQuery = `
+		FROM market_orders m
+		LEFT JOIN locations l ON m.location_id = l.location_id
+		WHERE m.auction_type = 'offer'
+			AND m.location_id IN ('0007','1002','2004','3008','4002')
+	`
+
+	// Total count for pagination
+	var total int
+	if err := db.QueryRowContext(context.Background(), "SELECT COUNT(*) "+baseQuery).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	offset := (page - 1) * pageSize
+
 	query := `
 		SELECT
 			m.item_type_id,
@@ -167,21 +193,18 @@ func getRecentOrders(db *sql.DB, limit int) ([]Order, error) {
 				WHERE h.albion_id = m.albion_id
 					AND h.location_id = m.location_id
 					AND h.quality_level = m.quality_level
-					AND h.timescale = 1
-					AND h.timestamp >= strftime('%s', 'now', '-7 days')
+					AND h.timescale = 2
+					AND h.timestamp >= strftime('%s', 'now', '-28 days')
 					AND h.per_item > 0
 			) ELSE NULL END AS weekly_avg
-		FROM market_orders m
-		LEFT JOIN locations l ON m.location_id = l.location_id
-		WHERE m.auction_type = 'offer'
-			AND m.location_id IN ('0007','1002','2004','3008','4002')
-		ORDER BY m.captured_at DESC
-		LIMIT ?
+	` + baseQuery + `
+		ORDER BY (weekly_avg * ? - m.unit_price_silver) DESC
+		LIMIT ? OFFSET ?
 	`
 
-	rows, err := db.QueryContext(context.Background(), query, limit)
+	rows, err := db.QueryContext(context.Background(), query, marketTaxFactor, pageSize, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -189,17 +212,21 @@ func getRecentOrders(db *sql.DB, limit int) ([]Order, error) {
 	for rows.Next() {
 		var o Order
 		var weeklyAvg sql.NullFloat64
-		err := rows.Scan(&o.ItemTypeID, &o.City, &o.Quality, &o.Price, &o.Supply, &o.AuctionType, &o.CapturedAt, &weeklyAvg)
-		if err != nil {
-			return nil, err
+		if err := rows.Scan(&o.ItemTypeID, &o.City, &o.Quality, &o.Price, &o.Supply, &o.AuctionType, &o.CapturedAt, &weeklyAvg); err != nil {
+			return nil, 0, err
 		}
-		if weeklyAvg.Valid {
-			o.WeeklyAvg = &weeklyAvg.Float64
+		if weeklyAvg.Valid && weeklyAvg.Float64 > 0 {
+			avg := weeklyAvg.Float64
+			profit := avg*marketTaxFactor - float64(o.Price)
+			profitPct := (profit / float64(o.Price)) * 100
+			o.MonthlyAvg = &avg
+			o.Profit = &profit
+			o.ProfitPct = &profitPct
 		}
 		orders = append(orders, o)
 	}
 
-	return orders, nil
+	return orders, total, nil
 }
 
 // API Handlers
@@ -217,21 +244,50 @@ func handleSearch(w http.ResponseWriter, r *http.Request, items map[string]strin
 }
 
 func handleRecentOrders(w http.ResponseWriter, r *http.Request, db *sql.DB) {
-	limitStr := r.URL.Query().Get("limit")
-	limit := 50
-	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
-			limit = l
+	page, pageSize := 1, 25
+	if p := r.URL.Query().Get("page"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+			page = v
+		}
+	}
+	if ps := r.URL.Query().Get("page_size"); ps != "" {
+		if v, err := strconv.Atoi(ps); err == nil && v > 0 && v <= 200 {
+			pageSize = v
 		}
 	}
 
-	orders, err := getRecentOrders(db, limit)
+	orders, total, err := getRecentOrders(db, page, pageSize)
 	if err != nil {
 		http.Error(w, "Error fetching orders", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(orders)
+	json.NewEncoder(w).Encode(OrdersResponse{
+		Orders:   orders,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	})
+}
+
+func handleClearData(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if _, err := db.ExecContext(context.Background(), "DELETE FROM market_orders"); err != nil {
+		http.Error(w, "Error clearing market_orders", http.StatusInternalServerError)
+		return
+	}
+
+	if _, err := db.ExecContext(context.Background(), "DELETE FROM market_histories"); err != nil {
+		http.Error(w, "Error clearing market_histories", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
 func serveSPA(w http.ResponseWriter, r *http.Request) {
@@ -268,6 +324,9 @@ func createMux(db *sql.DB, items map[string]string, hub *ScanHub) http.Handler {
 				return
 			case "/api/orders/recent":
 				handleRecentOrders(w, r, db)
+				return
+			case "/api/clear-data":
+				handleClearData(w, r, db)
 				return
 			default:
 				http.NotFound(w, r)

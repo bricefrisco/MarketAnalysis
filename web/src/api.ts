@@ -11,7 +11,16 @@ export interface Order {
   amount: number;
   auction_type: string;
   captured_at: string;
-  weekly_avg?: number | null;
+  monthly_avg?: number | null;
+  profit?: number | null;
+  profit_pct?: number | null;
+}
+
+export interface OrdersResponse {
+  orders: Order[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export async function searchItems(q: string): Promise<Item[]> {
@@ -21,10 +30,15 @@ export async function searchItems(q: string): Promise<Item[]> {
   return data || [];
 }
 
-export async function fetchRecentOrders(limit = 50): Promise<Order[]> {
-  const res = await fetch(`/api/orders/recent?limit=${limit}`);
+export async function fetchRecentOrders(page = 1, pageSize = 25): Promise<OrdersResponse> {
+  const res = await fetch(`/api/orders/recent?page=${page}&page_size=${pageSize}`);
   if (!res.ok) throw new Error(`Failed to fetch orders: ${res.status}`);
-  const data = await res.json();
-  return data || [];
+  return res.json();
+}
+
+export async function clearData(): Promise<{ status: string }> {
+  const res = await fetch('/api/clear-data', { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to clear data: ${res.status}`);
+  return res.json();
 }
 

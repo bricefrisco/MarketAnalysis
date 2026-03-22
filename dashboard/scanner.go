@@ -27,6 +27,13 @@ var zvzWeapons = []zvzWeapon{
 	{"Rotcaller Staff", "MAIN_CURSEDSTAFF_CRYSTAL", []int{7, 8}},
 	{"Rootbound Staff", "2H_SHAPESHIFTER_SET2", []int{7, 8}},
 	{"Carving Sword", "2H_CLEAVER_HELL", []int{7, 8, 9}},
+	{"Realmbreaker", "2H_AXE_AVALON", []int{7, 8, 9}},
+	{"Spiked Gauntlets", "2H_KNUCKLES_SET3", []int{7, 8, 9}},
+	{"Battle Bracers", "2H_KNUCKLES_SET2", []int{7, 8, 9}},
+	{"Hellfire Hands", "2H_KNUCKLES_HELL", []int{7, 8, 9}},
+	{"Permafrost Prism", "2H_ICECRYSTAL_UNDEAD", []int{7, 8, 9}},
+	{"Bloodletter", "MAIN_RAPIER_MORGANA", []int{7, 8, 9}},
+	{"Facebreaker", "OFF_SPIKEDSHIELD_MORGANA", []int{7, 8, 9}},
 }
 
 // zvzKey uniquely identifies a (base item_type_id, enchantment) pair we care about.

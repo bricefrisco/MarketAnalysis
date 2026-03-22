@@ -15,6 +15,13 @@ const ZVZ_WEAPONS = [
   { name: 'Rotcaller Staff',  baseId: 'MAIN_CURSEDSTAFF_CRYSTAL', tiers: [7, 8] },
   { name: 'Rootbound Staff',  baseId: '2H_SHAPESHIFTER_SET2',    tiers: [7, 8] },
   { name: 'Carving Sword',    baseId: '2H_CLEAVER_HELL',         tiers: [7, 8, 9] },
+  { name: 'Realmbreaker',     baseId: '2H_AXE_AVALON',           tiers: [7, 8, 9] },
+  { name: 'Spiked Gauntlets', baseId: '2H_KNUCKLES_SET3',        tiers: [7, 8, 9] },
+  { name: 'Battle Bracers',   baseId: '2H_KNUCKLES_SET2',        tiers: [7, 8, 9] },
+  { name: 'Hellfire Hands',   baseId: '2H_KNUCKLES_HELL',        tiers: [7, 8, 9] },
+  { name: 'Permafrost Prism', baseId: '2H_ICECRYSTAL_UNDEAD',    tiers: [7, 8, 9] },
+  { name: 'Bloodletter',      baseId: 'MAIN_RAPIER_MORGANA',     tiers: [7, 8, 9] },
+  { name: 'Facebreaker',      baseId: 'OFF_SPIKEDSHIELD_MORGANA', tiers: [7, 8, 9] },
 ];
 
 // Quality levels tracked (Normal=1, Good=2, Outstanding=3, Excellent=4, Masterpiece=5)

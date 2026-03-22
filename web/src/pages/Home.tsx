@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import {
-  Box, Container, Typography, Paper,
+  Box, Container, Typography, Paper, Button,
   Table, TableHead, TableBody, TableRow, TableCell,
-  Skeleton, Alert, Chip,
+  Skeleton, Alert, Chip, TablePagination,
+  Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
-import { type Order, fetchRecentOrders } from '../api';
+import DeleteIcon from '@mui/icons-material/Delete';
+import { type Order, type OrdersResponse, fetchRecentOrders, clearData } from '../api';
 import { parseItemMeta, qualityLabel } from '../itemUtils';
 
 type ItemsMap = Record<string, string>;
@@ -27,10 +29,14 @@ function timeAgo(dateStr: string): string {
 }
 
 export function Home() {
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [response, setResponse] = useState<OrdersResponse | null>(null);
   const [items, setItems] = useState<ItemsMap>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+  const [showClearDialog, setShowClearDialog] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   useEffect(() => {
     fetch('/api/items')
@@ -40,30 +46,50 @@ export function Home() {
   }, []);
 
   useEffect(() => {
-    fetchRecentOrders(100)
-      .then((data) => {
-        const sorted = [...data].sort((a, b) => {
-          const pctA = a.weekly_avg != null && a.weekly_avg > 0
-            ? (a.weekly_avg - a.unit_price_silver) / a.weekly_avg
-            : -Infinity;
-          const pctB = b.weekly_avg != null && b.weekly_avg > 0
-            ? (b.weekly_avg - b.unit_price_silver) / b.weekly_avg
-            : -Infinity;
-          return pctB - pctA;
-        });
-        setOrders(sorted);
-      })
+    setLoading(true);
+    fetchRecentOrders(page + 1, pageSize)
+      .then(setResponse)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [page, pageSize]);
+
+  const handleClear = async () => {
+    setClearing(true);
+    try {
+      await clearData();
+      setShowClearDialog(false);
+      setPage(0);
+      setResponse(null);
+      setLoading(true);
+      const result = await fetchRecentOrders(1, pageSize);
+      setResponse(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clear data');
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const orders: Order[] = response?.orders ?? [];
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
-        <TrendingUpIcon sx={{ color: 'primary.main' }} />
-        <Typography variant="h5" fontWeight={700} letterSpacing="-0.02em">
-          Live Market Orders
-        </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, mb: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <TrendingUpIcon sx={{ color: 'primary.main' }} />
+          <Typography variant="h5" fontWeight={700} letterSpacing="-0.02em">
+            Live Market Orders
+          </Typography>
+        </Box>
+        <Button
+          variant="outlined"
+          color="error"
+          size="small"
+          startIcon={<DeleteIcon />}
+          onClick={() => setShowClearDialog(true)}
+        >
+          Clear Data
+        </Button>
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         Most recent sell orders across all Royal Continent cities
@@ -79,8 +105,9 @@ export function Home() {
               <TableCell>City</TableCell>
               <TableCell align="center">Quality</TableCell>
               <TableCell align="right">Price</TableCell>
-              <TableCell align="right">7d Avg</TableCell>
-              <TableCell align="right">Discount</TableCell>
+              <TableCell align="right">4w Avg</TableCell>
+              <TableCell align="right">Profit</TableCell>
+              <TableCell align="right">Profit %</TableCell>
               <TableCell align="right">Supply</TableCell>
               <TableCell align="right">Seen</TableCell>
             </TableRow>
@@ -89,7 +116,7 @@ export function Home() {
             {loading
               ? Array.from({ length: 12 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 8 }).map((_, j) => (
+                    {Array.from({ length: 9 }).map((_, j) => (
                       <TableCell key={j}><Skeleton variant="text" /></TableCell>
                     ))}
                   </TableRow>
@@ -136,23 +163,38 @@ export function Home() {
                     <TableCell align="right">
                       <Typography variant="body2" color="text.secondary"
                         sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                        {order.weekly_avg != null ? Math.round(order.weekly_avg).toLocaleString() : '—'}
+                        {order.monthly_avg != null ? Math.round(order.monthly_avg).toLocaleString() : '—'}
                       </Typography>
                     </TableCell>
-                    <TableCell align="right">
-                      {order.weekly_avg != null && order.weekly_avg > 0 ? (() => {
-                        const pct = (order.weekly_avg - order.unit_price_silver) / order.weekly_avg * 100;
-                        const color = pct > 0 ? 'success.main' : pct < 0 ? 'error.main' : 'text.secondary';
+                    {(() => {
+                      const profit = order.profit;
+                      const profitPct = order.profit_pct;
+                      if (profit == null || profitPct == null) {
                         return (
-                          <Typography variant="body2" fontWeight={600} color={color}
-                            sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                            {pct > 0 ? '-' : pct < 0 ? '+' : ''}{Math.abs(pct).toFixed(1)}%
-                          </Typography>
+                          <>
+                            <TableCell align="right"><Typography variant="body2" color="text.disabled">—</Typography></TableCell>
+                            <TableCell align="right"><Typography variant="body2" color="text.disabled">—</Typography></TableCell>
+                          </>
                         );
-                      })() : (
-                        <Typography variant="body2" color="text.disabled">—</Typography>
-                      )}
-                    </TableCell>
+                      }
+                      const color = profit > 0 ? 'success.main' : profit < 0 ? 'error.main' : 'text.secondary';
+                      return (
+                        <>
+                          <TableCell align="right">
+                            <Typography variant="body2" fontWeight={600} color={color}
+                              sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                              {profit > 0 ? '+' : ''}{Math.round(profit).toLocaleString()}
+                            </Typography>
+                          </TableCell>
+                          <TableCell align="right">
+                            <Typography variant="body2" fontWeight={600} color={color}
+                              sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                              {profit > 0 ? '+' : ''}{profitPct.toFixed(1)}%
+                            </Typography>
+                          </TableCell>
+                        </>
+                      );
+                    })()}
                     <TableCell align="right">
                       <Typography variant="body2" color="text.secondary"
                         sx={{ fontVariantNumeric: 'tabular-nums' }}>
@@ -169,7 +211,29 @@ export function Home() {
             }
           </TableBody>
         </Table>
+        <TablePagination
+          component="div"
+          count={response?.total ?? 0}
+          page={page}
+          onPageChange={(_, newPage) => setPage(newPage)}
+          rowsPerPage={pageSize}
+          onRowsPerPageChange={(e) => { setPageSize(parseInt(e.target.value, 10)); setPage(0); }}
+          rowsPerPageOptions={[25, 50, 100, 200]}
+        />
       </Paper>
+
+      <Dialog open={showClearDialog} onClose={() => setShowClearDialog(false)}>
+        <DialogTitle>Clear Data</DialogTitle>
+        <DialogContent>
+          <Typography>Are you sure you want to delete all market data? This action cannot be undone.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowClearDialog(false)}>Cancel</Button>
+          <Button onClick={handleClear} color="error" variant="contained" disabled={clearing}>
+            {clearing ? 'Clearing...' : 'Clear'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Container>
   );
 }
