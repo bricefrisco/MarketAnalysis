@@ -64,16 +64,14 @@ type config struct {
 	OfflinePath                    string
 	RecordPath                     string
 	DBPath                         string
+	DashboardPort                  string
 	PrintVersion                   bool
-	UpdateGithubOwner              string
-	UpdateGithubRepo               string
 }
 
 // config global config data
 var ConfigGlobal = &config{
-	LogLevel:          "INFO",
-	UpdateGithubOwner: "ao-data",
-	UpdateGithubRepo:  "albiondata-client"}
+	LogLevel: "INFO",
+}
 
 func (config *config) SetupFlags() {
 	config.setupWebsocketFlags()
@@ -217,6 +215,13 @@ func (config *config) setupCommonFlags() {
 		"record",
 		"",
 		"Enable recording commands to a file for debugging later.",
+	)
+
+	flag.StringVar(
+		&config.DashboardPort,
+		"dashboard-port",
+		"8080",
+		"Port for the market analysis web dashboard (0 to disable).",
 	)
 }
 

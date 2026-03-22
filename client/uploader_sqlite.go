@@ -10,8 +10,25 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// writeRequest represents a single database write operation
+type writeRequest struct {
+	body       []byte
+	topic      string
+	identifier string
+}
+
+// Location mapping for Royal Continent cities
+var locationMap = map[string]string{
+	"0007": "Thetford",
+	"1002": "Lymhurst",
+	"2004": "Bridgewatch",
+	"3008": "Martlock",
+	"4002": "Fort Sterling",
+}
+
 type sqliteUploader struct {
-	db *sql.DB
+	db          *sql.DB
+	writeQueue  chan writeRequest
 }
 
 // newSQLiteUploader creates a new SQLite uploader
@@ -30,12 +47,23 @@ func newSQLiteUploader(dbPath string) (uploader, error) {
 		log.Warnf("Warning: failed to cleanup expired data: %v", err)
 	}
 
-	return &sqliteUploader{db: db}, nil
+	uploader := &sqliteUploader{
+		db:         db,
+		writeQueue: make(chan writeRequest, 100),
+	}
+
+	// Start the write queue processor goroutine
+	go uploader.processWriteQueue()
+
+	return uploader, nil
 }
 
 // initSchema creates all tables if they don't exist
 func initSchema(db *sql.DB) error {
 	schemas := []string{
+		`CREATE TABLE IF NOT EXISTS locations (
+			location_id TEXT PRIMARY KEY, location_name TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS market_orders (
 			id INTEGER, item_type_id TEXT, item_group_type_id TEXT,
 			location_id TEXT, quality_level INTEGER, enchantment_level INTEGER,
@@ -44,8 +72,8 @@ func initSchema(db *sql.DB) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS market_histories (
 			albion_id INTEGER, location_id TEXT, quality_level INTEGER,
-			timescale INTEGER, item_amount INTEGER, silver_amount INTEGER,
-			timestamp INTEGER, upload_identifier TEXT,
+			timescale INTEGER, item_amount INTEGER, silver_amount REAL,
+			per_item REAL, timestamp INTEGER, upload_identifier TEXT,
 			captured_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS gold_prices (
@@ -84,10 +112,104 @@ func initSchema(db *sql.DB) error {
 		}
 	}
 
+	// Populate locations table
+	if err := populateLocations(db); err != nil {
+		return fmt.Errorf("failed to populate locations: %w", err)
+	}
+
+	// Run migrations to add new columns to existing tables
+	if err := runMigrations(db); err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
 	return nil
 }
 
-func (u *sqliteUploader) sendToIngest(body []byte, topic string, state *albionState, identifier string) {
+// runMigrations removes location_name columns from tables if they exist
+func runMigrations(db *sql.DB) error {
+	tables := []string{"market_orders", "market_histories"}
+
+	for _, table := range tables {
+		// Check if location_name column exists
+		if hasColumn(db, table, "location_name") {
+			// Drop the column
+			_, err := db.Exec(fmt.Sprintf(`ALTER TABLE %s DROP COLUMN location_name`, table))
+			if err != nil {
+				log.Warnf("Failed to drop location_name from %s: %v", table, err)
+				// Continue with other migrations even if one fails
+			} else {
+				log.Infof("Dropped location_name column from %s", table)
+			}
+		}
+	}
+
+	// Add per_item column to market_histories if it doesn't exist
+	if !hasColumn(db, "market_histories", "per_item") {
+		_, err := db.Exec(`ALTER TABLE market_histories ADD COLUMN per_item REAL`)
+		if err != nil {
+			log.Warnf("Failed to add per_item column to market_histories: %v", err)
+		} else {
+			log.Infof("Added per_item column to market_histories")
+		}
+	}
+
+	return nil
+}
+
+// hasColumn checks if a table has a specific column
+func hasColumn(db *sql.DB, tableName, columnName string) bool {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, tableName))
+	if err != nil {
+		log.Debugf("Failed to query table info for %s: %v", tableName, err)
+		return false
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notnull int
+		var dfltValue interface{}
+		var pk int
+
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dfltValue, &pk); err != nil {
+			log.Debugf("Failed to scan table info: %v", err)
+			continue
+		}
+
+		if name == columnName {
+			return true
+		}
+	}
+
+	return false
+}
+
+
+// populateLocations inserts or updates the location mappings
+func populateLocations(db *sql.DB) error {
+	for id, name := range locationMap {
+		_, err := db.Exec(`
+			INSERT OR REPLACE INTO locations (location_id, location_name)
+			VALUES (?, ?)
+		`, id, name)
+		if err != nil {
+			return fmt.Errorf("failed to insert location %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// processWriteQueue processes database writes serially from the queue
+func (u *sqliteUploader) processWriteQueue() {
+	for req := range u.writeQueue {
+		u.executeWrite(req.body, req.topic, req.identifier)
+	}
+}
+
+// executeWrite performs the actual database write operation
+func (u *sqliteUploader) executeWrite(body []byte, topic string, identifier string) {
 	tx, err := u.db.Begin()
 	if err != nil {
 		log.Errorf("Failed to begin transaction: %v", err)
@@ -137,6 +259,16 @@ func (u *sqliteUploader) sendToIngest(body []byte, topic string, state *albionSt
 	log.Infof("Successfully inserted data for topic %v", topic)
 }
 
+// sendToIngest queues a write request to be processed serially
+func (u *sqliteUploader) sendToIngest(body []byte, topic string, state *albionState, identifier string) {
+	select {
+	case u.writeQueue <- writeRequest{body: body, topic: topic, identifier: identifier}:
+		// Request queued successfully
+	default:
+		log.Warnf("Write queue full, dropping request for topic %v", topic)
+	}
+}
+
 func (u *sqliteUploader) insertMarketOrders(tx *sql.Tx, body []byte, identifier string) error {
 	var upload lib.MarketUpload
 	if err := json.Unmarshal(body, &upload); err != nil {
@@ -157,7 +289,7 @@ func (u *sqliteUploader) insertMarketOrders(tx *sql.Tx, body []byte, identifier 
 	for _, order := range upload.Orders {
 		_, err := stmt.Exec(
 			order.ID, order.ItemID, order.GroupTypeId, order.LocationID, order.QualityLevel,
-			order.EnchantmentLevel, order.Price, order.Amount, order.AuctionType, order.Expires, identifier,
+			order.EnchantmentLevel, order.Price/1000, order.Amount, order.AuctionType, order.Expires, identifier,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert market order: %w", err)
@@ -176,18 +308,28 @@ func (u *sqliteUploader) insertMarketHistories(tx *sql.Tx, body []byte, identifi
 	stmt, err := tx.Prepare(`
 		INSERT INTO market_histories (
 			albion_id, location_id, quality_level, timescale, item_amount,
-			silver_amount, timestamp, upload_identifier
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			silver_amount, per_item, timestamp, upload_identifier
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
+	const dotNetTicksPerSecond = 10_000_000
+	const dotNetEpochOffset = 621_355_968_000_000_000
+
 	for _, history := range upload.Histories {
+		silverAmount := float64(history.SilverAmount) / 10000.0
+		var perItem float64
+		if history.ItemAmount > 0 {
+			perItem = silverAmount / float64(history.ItemAmount)
+		}
+		epochTimestamp := int64((history.Timestamp - dotNetEpochOffset) / dotNetTicksPerSecond)
+
 		_, err := stmt.Exec(
 			upload.AlbionId, upload.LocationId, upload.QualityLevel, upload.Timescale,
-			history.ItemAmount, history.SilverAmount, history.Timestamp, identifier,
+			history.ItemAmount, silverAmount, perItem, epochTimestamp, identifier,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert market history: %w", err)
@@ -213,7 +355,7 @@ func (u *sqliteUploader) insertGoldPrices(tx *sql.Tx, body []byte, identifier st
 	defer stmt.Close()
 
 	for i, price := range upload.Prices {
-		_, err := stmt.Exec(price, upload.TimeStamps[i], identifier)
+		_, err := stmt.Exec(price/1000, upload.TimeStamps[i], identifier)
 		if err != nil {
 			return fmt.Errorf("failed to insert gold price: %w", err)
 		}
@@ -327,8 +469,8 @@ func (u *sqliteUploader) insertMarketNotifications(tx *sql.Tx, body []byte, iden
 		locationID = notification.LocationID
 		amount = notification.Amount
 		expires = notification.Expires
-		price = notification.Price
-		totalAfterTaxes.Float64 = float64(notification.TotalAfterTaxes)
+		price = notification.Price / 1000
+		totalAfterTaxes.Float64 = float64(notification.TotalAfterTaxes) / 1000
 		totalAfterTaxes.Valid = true
 
 	case *lib.MarketExpiryNotification:
@@ -337,7 +479,7 @@ func (u *sqliteUploader) insertMarketNotifications(tx *sql.Tx, body []byte, iden
 		locationID = notification.LocationID
 		amount = notification.Amount
 		expires = notification.Expires
-		price = notification.Price
+		price = notification.Price / 1000
 		sold.Int64 = int64(notification.Sold)
 		sold.Valid = true
 

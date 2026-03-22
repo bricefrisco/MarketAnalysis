@@ -37,7 +37,10 @@ func (m *MailInfo) StringArray() []string {
 }
 
 func (m *MailInfo) StringExpires() string {
-	return time.Unix(m.Expires, 0).Format(time.RFC3339)
+	// Convert timestamp from game units (10,000 per second) to Unix seconds
+	const gameTicksPerSecond = 10000
+	expiresSec := m.Expires / gameTicksPerSecond
+	return time.Unix(expiresSec, 0).Format(time.RFC3339)
 }
 
 type operationGetMailInfosResponse struct {

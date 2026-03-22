@@ -42,9 +42,9 @@ func (op operationAuctionGetItemAverageStats) Process(state *albionState) {
 }
 
 type operationAuctionGetItemAverageStatsResponse struct {
-	ItemAmounts   []int64  `mapstructure:"0"`
-	SilverAmounts []uint64 `mapstructure:"1"`
-	Timestamps    []uint64 `mapstructure:"2"`
+	ItemAmounts   []int64            `mapstructure:"0"`
+	SilverAmounts []uint64           `mapstructure:"1"`
+	Timestamps    []uint64           `mapstructure:"2"`
 	MessageID     int      `mapstructure:"255"`
 }
 
@@ -64,7 +64,7 @@ func (op operationAuctionGetItemAverageStatsResponse) Process(state *albionState
 
 	// Still no correlating Request has been processed
 	if state.marketHistoryIDLookup[index].albionId < 1 {
-		log.Warnf("Market History - Market history at index %d is invalid. Has albionId: %s ", index, state.marketHistoryIDLookup[index].albionId)
+		log.Warnf("Market History - Market history at index %d is invalid. Has albionId: %d ", index, state.marketHistoryIDLookup[index].albionId)
 		return
 	}
 
@@ -107,9 +107,9 @@ func (op operationAuctionGetItemAverageStatsResponse) Process(state *albionState
 		return
 	}
 
-	// Sort history by descending time so the newest is always first in the list
+	// Sort history by ascending time
 	sort.SliceStable(histories, func(i, j int) bool {
-		return histories[i].Timestamp > histories[j].Timestamp
+		return histories[i].Timestamp < histories[j].Timestamp
 	})
 
 	upload := lib.MarketHistoriesUpload{

@@ -22,9 +22,36 @@ The cleanup process:
 
 This keeps the database clean of stale auction orders and market mail notifications.
 
+## Silver Amount Normalization
+
+Silver amounts are divided at ingestion to normalize the data:
+
+- **Divided by 10,000:** `market_histories.silver_amount`, `market_histories.per_item`
+- **Divided by 1,000:** `market_orders.unit_price_silver`, `gold_prices.price`, `market_notifications.unit_price_silver`, `market_notifications.total_after_taxes`
+
 ---
 
 ## Tables
+
+### `locations`
+
+Reference table mapping location IDs to Royal Continent city names.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `location_id` | TEXT | Location identifier (e.g., "4000") |
+| `location_name` | TEXT | City name (e.g., "Fort Sterling") |
+
+**Populated locations:**
+- `0007` → Thetford
+- `1002` → Lymhurst
+- `2004` → Bridgewatch
+- `3008` → Martlock
+- `4002` → Fort Sterling
+
+**Usage:** Join on `location_id` to get human-readable city names for queries.
+
+---
 
 ### `market_orders`
 
@@ -35,10 +62,10 @@ Market buy and sell orders from the auction house.
 | `id` | INTEGER | Order ID from game |
 | `item_type_id` | TEXT | Item identifier (e.g., "T4_BAG") |
 | `item_group_type_id` | TEXT | Item group/category identifier |
-| `location_id` | TEXT | Location code (e.g., "3005", "BLACKBANK-1") |
+| `location_id` | TEXT | Location code (e.g., "4002" for Fort Sterling, "BLACKBANK-1" for hideouts) |
 | `quality_level` | INTEGER | Item quality: 1-5 |
 | `enchantment_level` | INTEGER | Enchantment level: 0-3 |
-| `unit_price_silver` | INTEGER | Price per unit in silver |
+| `unit_price_silver` | INTEGER | Price per unit in silver (divided by 1000 at ingestion) |
 | `amount` | INTEGER | Number of items in order |
 | `auction_type` | TEXT | Order type: "offer" (selling) or "request" (buying) |
 | `expires` | TEXT | Expiration timestamp (RFC3339 format) |
@@ -47,7 +74,7 @@ Market buy and sell orders from the auction house.
 
 **Key insights:**
 - Both buy and sell orders use the same table with `auction_type` distinguishing them
-- `location_id` can be numeric (e.g., "3005" for Royal Continent) or named (e.g., "BLACKBANK-1")
+- `location_id` can be numeric (e.g., "2004" for Royal Continent) or named (e.g., "2301" for hideouts)
 - All records in a single market update share the same `upload_identifier`
 
 ---
@@ -59,11 +86,12 @@ Historical price data for items over different time periods.
 | Column | Type | Description |
 |--------|------|-------------|
 | `albion_id` | INTEGER | Numeric item ID from Albion's internal data |
-| `location_id` | TEXT | Location code (e.g., "3005") |
+| `location_id` | TEXT | Location code (e.g., "4002" for Fort Sterling) |
 | `quality_level` | INTEGER | Item quality: 1-5 |
 | `timescale` | INTEGER | Period grouping: 0=Hours, 1=Days, 2=Weeks |
 | `item_amount` | INTEGER | Total units traded in period |
-| `silver_amount` | INTEGER | Total silver transacted in period |
+| `silver_amount` | REAL | Total silver transacted in period (divided by 10,000 at ingestion) |
+| `per_item` | REAL | Average silver per item (`silver_amount / item_amount`, divided by 10,000 at ingestion) |
 | `timestamp` | INTEGER | Unix epoch seconds (end of period) |
 | `upload_identifier` | TEXT | UUID batch grouping |
 | `captured_at` | DATETIME | Server timestamp when record was inserted |
@@ -87,7 +115,7 @@ Gold-to-silver conversion rates (for premium currency trading).
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `price` | INTEGER | Price of 1 gold in silver |
+| `price` | INTEGER | Price of 1 gold in silver (divided by 1000 at ingestion) |
 | `timestamp` | INTEGER | Unix epoch seconds when price was recorded |
 | `upload_identifier` | TEXT | UUID batch grouping |
 | `captured_at` | DATETIME | Server timestamp when record was inserted |
@@ -184,8 +212,8 @@ Market mail notifications (sales and expiries) (private).
 | `location_id` | TEXT | Location code |
 | `amount` | INTEGER | Number of items |
 | `expires` | TEXT | Expiration timestamp (RFC3339 format) |
-| `unit_price_silver` | INTEGER | Price per unit in silver |
-| `total_after_taxes` | REAL | Total revenue after marketplace taxes (NULL for ExpiryNotification) |
+| `unit_price_silver` | INTEGER | Price per unit in silver (divided by 1000 at ingestion) |
+| `total_after_taxes` | REAL | Total revenue after marketplace taxes, in silver (divided by 1000 at ingestion; NULL for ExpiryNotification) |
 | `sold` | INTEGER | Units sold (NULL for SalesNotification, only in ExpiryNotification) |
 | `upload_identifier` | TEXT | UUID batch grouping |
 | `captured_at` | DATETIME | Server timestamp when record was inserted |
@@ -243,13 +271,24 @@ SELECT 'market_notifications', COUNT(*) FROM market_notifications WHERE upload_i
 
 ## Example Queries
 
-### Latest market prices for an item
+### Latest market prices for an item with city names
 ```sql
-SELECT location_id, unit_price_silver, auction_type, amount, captured_at
-FROM market_orders
-WHERE item_type_id = 'T4_ARMOR_PLATE' AND auction_type = 'offer'
-ORDER BY captured_at DESC
+SELECT l.location_name, m.unit_price_silver, m.amount, m.auction_type, m.captured_at
+FROM market_orders m
+LEFT JOIN locations l ON m.location_id = l.location_id
+WHERE m.item_type_id = 'T4_ARMOR_PLATE' AND m.auction_type = 'offer'
+ORDER BY m.captured_at DESC
 LIMIT 100;
+```
+
+### Latest prices by city
+```sql
+SELECT l.location_name, m.unit_price_silver, m.amount, m.captured_at
+FROM market_orders m
+LEFT JOIN locations l ON m.location_id = l.location_id
+WHERE m.item_type_id = 'T4_ARMOR_PLATE' AND l.location_name IN ('Fort Sterling', 'Bridgewatch', 'Lymhurst')
+ORDER BY m.captured_at DESC
+LIMIT 50;
 ```
 
 ### Gold price trend
@@ -267,6 +306,11 @@ FROM skills
 WHERE character_id = 'player-uuid-here'
 ORDER BY captured_at DESC
 LIMIT 1;  -- Most recent
+```
+
+### Location reference lookup
+```sql
+SELECT location_id, location_name FROM locations ORDER BY location_name;
 ```
 
 ### Map ownership changes

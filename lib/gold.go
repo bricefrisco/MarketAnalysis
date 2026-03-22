@@ -15,9 +15,12 @@ func (g *GoldPricesUpload) StringArrays() [][]string {
 	result := [][]string{}
 
 	for i := range g.Prices {
+		// Convert timestamp from game units (10,000 per second) to Unix seconds
+		const gameTicksPerSecond = 10000
+		timestampSec := g.TimeStamps[i] / gameTicksPerSecond
 		result = append(result, []string{
 			fmt.Sprintf("%d", g.Prices[i]),
-			time.Unix(g.TimeStamps[i], 0).Format(time.RFC3339),
+			time.Unix(timestampSec, 0).Format(time.RFC3339),
 		})
 	}
 
