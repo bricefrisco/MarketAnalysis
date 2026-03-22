@@ -328,6 +328,9 @@ func createMux(db *sql.DB, items map[string]string, hub *ScanHub) http.Handler {
 			case "/api/clear-data":
 				handleClearData(w, r, db)
 				return
+			case "/api/crafting":
+				handleCrafting(w, r, db, items)
+				return
 			default:
 				http.NotFound(w, r)
 				return

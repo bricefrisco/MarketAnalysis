@@ -19,4 +19,16 @@ run.sh
 *.log
 *.log.*
 
+# Local data and caches
+albiondata.db
+.cache/
+
+# Claude Code settings
+.claude/
+
+# Build artifacts
+market-dashboard
+test-build
+market-agent.exe~
+
 

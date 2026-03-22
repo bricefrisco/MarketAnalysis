@@ -36,6 +36,35 @@ export async function fetchRecentOrders(page = 1, pageSize = 25): Promise<Orders
   return res.json();
 }
 
+export interface CraftingResource {
+  item_type_id: string;
+  name: string;
+  count: number;
+  no_return: boolean;
+  avg_price: number;
+}
+
+export interface CraftingItem {
+  item_type_id: string;
+  name: string;
+  tier: number;
+  category: string;
+  sub_category: string;
+  resources: CraftingResource[];
+  avg_sell_price: number;
+}
+
+export interface CraftingResponse {
+  items: CraftingItem[];
+  location_id: string;
+}
+
+export async function fetchCrafting(city: string): Promise<CraftingResponse> {
+  const res = await fetch(`/api/crafting?city=${encodeURIComponent(city)}`);
+  if (!res.ok) throw new Error(`Failed to fetch crafting data: ${res.status}`);
+  return res.json();
+}
+
 export async function clearData(): Promise<{ status: string }> {
   const res = await fetch('/api/clear-data', { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to clear data: ${res.status}`);
