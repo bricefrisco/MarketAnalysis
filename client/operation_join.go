@@ -20,10 +20,6 @@ type operationJoinResponse struct {
 func (op operationJoinResponse) Process(state *albionState) {
 	log.Debugf("Got JoinResponse operation...")
 
-	// Reset the AODataServerID here. This leads to a fresh execution
-	// of SetServerID() incase the player switched servers
-	state.AODataServerID = 0
-
 	log.Infof("Updating player location to %v.", op.Location)
 	state.LocationId = op.Location
 
