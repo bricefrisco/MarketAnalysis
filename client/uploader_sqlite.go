@@ -347,9 +347,6 @@ func (u *sqliteUploader) executeWrite(body []byte, topic string, identifier stri
 	case lib.NatsBanditEvent:
 		insertErr = u.insertBanditEvent(tx, body, identifier)
 
-	case lib.NatsSkillData:
-		insertErr = u.insertSkills(tx, body, identifier)
-
 	case lib.NatsMarketNotifications:
 		insertErr = u.insertMarketNotifications(tx, body, identifier)
 
@@ -609,35 +606,6 @@ func (u *sqliteUploader) insertBanditEvent(tx *sql.Tx, body []byte, identifier s
 	`, event.EventTime, event.Phase, identifier)
 
 	return err
-}
-
-func (u *sqliteUploader) insertSkills(tx *sql.Tx, body []byte, identifier string) error {
-	var upload lib.SkillsUpload
-	if err := json.Unmarshal(body, &upload); err != nil {
-		return fmt.Errorf("failed to unmarshal SkillsUpload: %w", err)
-	}
-
-	stmt, err := tx.Prepare(`
-		INSERT INTO skills (
-			character_id, character_name, skill_id, level, percent_next_level, fame, upload_identifier
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, skill := range upload.Skills {
-		_, err := stmt.Exec(
-			upload.CharacterId, upload.CharacterName, skill.ID, skill.Level,
-			skill.PercentNextLevel, skill.Fame, identifier,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to insert skill: %w", err)
-		}
-	}
-
-	return nil
 }
 
 func (u *sqliteUploader) insertMarketNotifications(tx *sql.Tx, body []byte, identifier string) error {

@@ -78,12 +78,6 @@ func decodeEvent(params map[uint8]interface{}) (event operation, err error) {
 	eventType := params[252].(int16)
 
 	switch EventType(eventType) {
-	// case evRespawn: //TODO: confirm this eventCode (old 77)
-	// 	event = &eventPlayerOnlineStatus{}
-	// case evCharacterStats: //TODO: confirm this eventCode (old 114)
-	// 	event = &eventSkillData{}
-	//case evRedZonePlayerNotification:
-	//	event = &eventRedZonePlayerNotification{}
 	case evRedZoneWorldMapEvent:
 		event = &eventRedZoneWorldMapEvent{}
 	default:

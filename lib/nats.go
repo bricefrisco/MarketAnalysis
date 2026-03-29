@@ -14,6 +14,5 @@ const (
 	NatsBanditEvent            = "banditevent.ingest"
 
 	// Private Topics
-	NatsSkillData           = "skills"
 	NatsMarketNotifications = "marketnotifications"
 )
