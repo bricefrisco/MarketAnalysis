@@ -253,7 +253,7 @@ func (l *listener) onReliableCommand(command *photon.PhotonCommand) {
 				log.Debugf("EventDataType: [%v]%v - %v", number, EventType(number), params)
 			}
 		} else if !ConfigGlobal.DebugIgnoreDecodingErrors {
-			log.Debugf("EventDataType: ERROR - %v", params)
+			log.Tracef("EventDataType: ERROR - %v", params)
 		}
 	default:
 		err = fmt.Errorf("unsupported message type: %v, data: %v", msg.Type, base64.StdEncoding.EncodeToString(msg.Data))
