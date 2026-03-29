@@ -10,12 +10,24 @@ import (
 	"github.com/mitchellh/mapstructure"
 )
 
+func isMovementOp(code OperationType) bool {
+	switch code {
+	case opMove, opAttackStart, opCastStart, opCastCancel, opChannelingCancel, opAttackBuildingStart, opChannelingUpdate:
+		return true
+	}
+	return false
+}
+
 func decodeRequest(params map[uint8]interface{}) (operation operation, err error) {
 	if _, ok := params[253]; !ok {
 		return nil, nil
 	}
 
 	code := params[253].(int16)
+
+	if !isMovementOp(OperationType(code)) {
+		log.Debugf("Incoming request op: %v (%d)", OperationType(code), code)
+	}
 
 	switch OperationType(code) {
 	case opAuctionGetOffers:
@@ -41,6 +53,10 @@ func decodeResponse(params map[uint8]interface{}) (operation operation, err erro
 	}
 
 	code := params[253].(int16)
+
+	if !isMovementOp(OperationType(code)) {
+		log.Debugf("Incoming response op: %v (%d)", OperationType(code), code)
+	}
 
 	switch OperationType(code) {
 	case opJoin:
@@ -72,6 +88,8 @@ func decodeEvent(params map[uint8]interface{}) (event operation, err error) {
 	}
 
 	eventType := params[252].(int16)
+
+	log.Debugf("Incoming event: %v (%d)", EventType(eventType), eventType)
 
 	switch EventType(eventType) {
 	case evRedZoneWorldMapEvent:
