@@ -22,9 +22,13 @@ type writeRequest struct {
 	identifier string
 }
 
-// ScanNotify is called when the player requests 7-day market history for an item.
-// Set by the main package to notify the dashboard scanner in real-time.
-var ScanNotify func(albionId int32, qualityLevel int)
+// CraftingNotify is called after market orders or histories are stored for a royal city.
+// Set by the main package to trigger crafting dashboard price refresh.
+var CraftingNotify func(locationID string)
+
+// RefiningNotify is called after market orders are stored for a royal city.
+// Set by the main package to trigger refining dashboard price refresh.
+var RefiningNotify func(locationID string)
 
 // Location mapping for Royal Continent cities
 var locationMap = map[string]string{
@@ -365,6 +369,39 @@ func (u *sqliteUploader) executeWrite(body []byte, topic string, identifier stri
 	}
 
 	log.Infof("Successfully inserted data for topic %v", topic)
+
+	// Notify dashboards after price data is committed for royal cities.
+	switch topic {
+	case lib.NatsMarketOrdersIngest:
+		var upload lib.MarketUpload
+		if json.Unmarshal(body, &upload) == nil {
+			seen := map[string]bool{}
+			for _, o := range upload.Orders {
+				if _, isRoyal := locationMap[o.LocationID]; isRoyal && !seen[o.LocationID] {
+					seen[o.LocationID] = true
+					loc := o.LocationID
+					if CraftingNotify != nil {
+						go CraftingNotify(loc)
+					}
+					if RefiningNotify != nil {
+						go RefiningNotify(loc)
+					}
+				}
+			}
+		}
+	case lib.NatsMarketHistoriesIngest:
+		var upload lib.MarketHistoriesUpload
+		if json.Unmarshal(body, &upload) == nil {
+			if _, isRoyal := locationMap[upload.LocationId]; isRoyal {
+				if CraftingNotify != nil {
+					go CraftingNotify(upload.LocationId)
+				}
+				if RefiningNotify != nil {
+					go RefiningNotify(upload.LocationId)
+				}
+			}
+		}
+	}
 }
 
 // sendToIngest queues a write request to be processed serially
@@ -394,7 +431,8 @@ func (u *sqliteUploader) insertMarketOrders(tx *sql.Tx, body []byte, identifier 
 	}
 	defer insertStmt.Close()
 
-	updateStmt, err := tx.Prepare(`
+	// Sell orders (offer): keep the minimum price — replace when stored price is higher than incoming.
+	updateOfferStmt, err := tx.Prepare(`
 		UPDATE market_orders SET
 			id = ?, item_group_type_id = ?, albion_id = ?,
 			unit_price_silver = ?, amount = ?, expires = ?, upload_identifier = ?
@@ -405,7 +443,21 @@ func (u *sqliteUploader) insertMarketOrders(tx *sql.Tx, body []byte, identifier 
 	if err != nil {
 		return err
 	}
-	defer updateStmt.Close()
+	defer updateOfferStmt.Close()
+
+	// Buy orders (request): keep the maximum price — replace when stored price is lower than incoming.
+	updateRequestStmt, err := tx.Prepare(`
+		UPDATE market_orders SET
+			id = ?, item_group_type_id = ?, albion_id = ?,
+			unit_price_silver = ?, amount = ?, expires = ?, upload_identifier = ?
+		WHERE item_type_id = ? AND enchantment_level = ? AND location_id = ?
+			AND quality_level = ? AND auction_type = ?
+			AND unit_price_silver < ?
+	`)
+	if err != nil {
+		return err
+	}
+	defer updateRequestStmt.Close()
 
 	for _, order := range upload.Orders {
 		albionID := u.albionIDMap[order.ItemID]
@@ -416,6 +468,10 @@ func (u *sqliteUploader) insertMarketOrders(tx *sql.Tx, body []byte, identifier 
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert market order: %w", err)
+		}
+		updateStmt := updateOfferStmt
+		if order.AuctionType == "request" {
+			updateStmt = updateRequestStmt
 		}
 		_, err = updateStmt.Exec(
 			order.ID, order.GroupTypeId, albionID,

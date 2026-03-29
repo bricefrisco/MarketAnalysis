@@ -46,9 +46,11 @@ func main() {
 func runClient() {
 	// Start the market dashboard if enabled
 	if client.ConfigGlobal.DashboardPort != "0" {
-		hub := dashboard.NewScanHub()
-		client.ScanNotify = hub.Notify
-		go dashboard.Start(client.ConfigGlobal.DBPath, client.ConfigGlobal.DashboardPort, hub)
+		craftingHub := dashboard.NewCraftingHub()
+		client.CraftingNotify = craftingHub.Notify
+		refiningHub := dashboard.NewRefiningHub()
+		client.RefiningNotify = refiningHub.Notify
+		go dashboard.Start(client.ConfigGlobal.DBPath, client.ConfigGlobal.DashboardPort, craftingHub, refiningHub)
 	}
 
 	c := client.NewClient(version)

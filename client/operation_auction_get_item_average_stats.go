@@ -40,9 +40,7 @@ func (op operationAuctionGetItemAverageStats) Process(state *albionState) {
 	state.marketHistoryIDLookup[index] = mhInfo
 	log.Debugf("Market History - Caching %d at %d.", mhInfo.albionId, index)
 
-	if op.Timescale == lib.Weeks && ScanNotify != nil {
-		go ScanNotify(itemId, int(op.Quality))
-	}
+
 }
 
 type operationAuctionGetItemAverageStatsResponse struct {
