@@ -13,6 +13,4 @@ const (
 	NatsMapDataDeduped         = "mapdata.deduped"
 	NatsBanditEvent            = "banditevent.ingest"
 
-	// Private Topics
-	NatsMarketNotifications = "marketnotifications"
 )

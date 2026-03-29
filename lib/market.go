@@ -34,51 +34,6 @@ const (
 	SalesTax = 0.03
 )
 
-type MarketNotificationType string
-
-const (
-	SalesNotification  MarketNotificationType = "SalesNotification"
-	ExpiryNotification                        = "ExpiryNotification"
-)
-
-type MarketNotification interface {
-	Type() MarketNotificationType
-}
-
-type MarketSellNotification struct {
-	MailID          int     `json:"Id"`
-	ItemID          string  `json:"ItemTypeId"`
-	LocationID      string  `json:"LocationId"`
-	Amount          int     `json:"Amount"`
-	Expires         string  `json:"Expires"`
-	Price           int     `json:"UnitPriceSilver"`
-	TotalAfterTaxes float32 `json:"TotalAfterTaxes"`
-}
-
-type MarketExpiryNotification struct {
-	MailID     int    `json:"Id"`
-	ItemID     string `json:"ItemTypeId"`
-	LocationID string `json:"LocationId"`
-	Amount     int    `json:"Amount"`
-	Expires    string `json:"Expires"`
-	Price      int    `json:"UnitPriceSilver"`
-	Sold       int    `json:"Sold"`
-}
-
-func (m *MarketSellNotification) Type() MarketNotificationType {
-	return SalesNotification
-}
-
-func (m *MarketExpiryNotification) Type() MarketNotificationType {
-	return ExpiryNotification
-}
-
-type MarketNotificationUpload struct {
-	PrivateUpload
-	Type         MarketNotificationType `json:"NotificationType"`
-	Notification MarketNotification     `json:"Notification"`
-}
-
 // MarketUpload contains a list of orders
 type MarketUpload struct {
 	Orders []*MarketOrder `json:"Orders"`

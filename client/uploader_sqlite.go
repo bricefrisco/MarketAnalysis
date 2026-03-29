@@ -347,9 +347,6 @@ func (u *sqliteUploader) executeWrite(body []byte, topic string, identifier stri
 	case lib.NatsBanditEvent:
 		insertErr = u.insertBanditEvent(tx, body, identifier)
 
-	case lib.NatsMarketNotifications:
-		insertErr = u.insertMarketNotifications(tx, body, identifier)
-
 	default:
 		log.Warnf("Unknown topic for SQLite insert: %v", topic)
 		return
@@ -604,57 +601,6 @@ func (u *sqliteUploader) insertBanditEvent(tx *sql.Tx, body []byte, identifier s
 		INSERT INTO bandit_events (event_time, phase, upload_identifier)
 		VALUES (?, ?, ?)
 	`, event.EventTime, event.Phase, identifier)
-
-	return err
-}
-
-func (u *sqliteUploader) insertMarketNotifications(tx *sql.Tx, body []byte, identifier string) error {
-	var upload lib.MarketNotificationUpload
-	if err := json.Unmarshal(body, &upload); err != nil {
-		return fmt.Errorf("failed to unmarshal MarketNotificationUpload: %w", err)
-	}
-
-	notificationType := string(upload.Type)
-
-	// Handle both notification types (SalesNotification and ExpiryNotification)
-	var mailID int
-	var itemID, locationID, expires string
-	var amount, price int
-	var totalAfterTaxes sql.NullFloat64
-	var sold sql.NullInt64
-
-	switch notification := upload.Notification.(type) {
-	case *lib.MarketSellNotification:
-		mailID = notification.MailID
-		itemID = notification.ItemID
-		locationID = notification.LocationID
-		amount = notification.Amount
-		expires = notification.Expires
-		price = notification.Price / 10000
-		totalAfterTaxes.Float64 = float64(notification.TotalAfterTaxes) / 10000
-		totalAfterTaxes.Valid = true
-
-	case *lib.MarketExpiryNotification:
-		mailID = notification.MailID
-		itemID = notification.ItemID
-		locationID = notification.LocationID
-		amount = notification.Amount
-		expires = notification.Expires
-		price = notification.Price / 10000
-		sold.Int64 = int64(notification.Sold)
-		sold.Valid = true
-
-	default:
-		return fmt.Errorf("unknown notification type in MarketNotificationUpload")
-	}
-
-	_, err := tx.Exec(`
-		INSERT INTO market_notifications (
-			character_id, character_name, notification_type, mail_id, item_type_id,
-			location_id, amount, expires, unit_price_silver, total_after_taxes, sold, upload_identifier
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, upload.CharacterId, upload.CharacterName, notificationType, mailID, itemID,
-		locationID, amount, expires, price, totalAfterTaxes, sold, identifier)
 
 	return err
 }
